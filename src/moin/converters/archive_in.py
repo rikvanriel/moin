@@ -148,7 +148,7 @@ class ZipConverter(ArchiveConverter):
                         dt = datetime.min
                     rows.append((zinfo.file_size, dt, zinfo.filename))  # y,m,d,h,m,s
             return rows
-        except (RuntimeError, zipfile.BadZipfile) as err:
+        except (RuntimeError, zipfile.BadZipFile) as err:
             # RuntimeError is raised by zipfile stdlib module in case of
             # problems (like inconsistent slash and backslash usage in the
             # archive or a defective zip file).
