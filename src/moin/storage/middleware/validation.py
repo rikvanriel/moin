@@ -529,6 +529,33 @@ def validate_data(meta: MetaData, data: ItemData) -> bool:
         # we can't validate non-text mimetypes, so assume it is ok
         return True
 
+    # Reject huge text uploads up front (decompression bombs and the
+    # like would otherwise be fully decoded below). Not all file-like
+    # objects are seekable (request streams may not be), so fall back to
+    # a bounded read when seek/tell is unavailable.
+    MAX_TEXT_SIZE = 100 * 1024 * 1024  # 100 MB
+    try:
+        data.seek(0, 2)  # seek to end
+        size = data.tell()
+        data.seek(0)  # rewind, so it can be read again
+    except (OSError, IOError, ValueError):
+        # Non-seekable streams (closed, pipes, request bodies): bound the
+        # read to limit+1 bytes instead of slurping the whole stream.
+        # Streams that cannot even be rewound for that single read are not
+        # valid uploads either.
+        try:
+            data.seek(0)
+        except (OSError, IOError, ValueError):
+            return False
+        chunk = data.read(MAX_TEXT_SIZE + 1)
+        try:
+            data.seek(0)
+        except (OSError, IOError, ValueError):
+            pass
+        size = len(chunk)
+    if size > MAX_TEXT_SIZE:
+        return False
+
     coding = ct.parameters["charset"].lower()
     if coding not in ["ascii", "utf-8"]:
         # checking 8bit encodings this way is pointless, decoding never raises

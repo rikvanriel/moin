@@ -6,7 +6,9 @@ MoinMoin - validation tests.
 """
 
 from moin.constants.itemtypes import ITEMTYPE_DEFAULT, ITEMTYPE_USERPROFILE
-from moin.storage.middleware.validation import ContentMetaSchema, UserMetaSchema
+from moin.storage.middleware.validation import ContentMetaSchema, UserMetaSchema, validate_data
+
+from io import BytesIO
 
 from moin.constants import keys
 from moin.constants.contenttypes import CONTENTTYPE_USER
@@ -105,3 +107,44 @@ class TestValidation:
             if e.name in (keys.SUBSCRIPTIONS,):
                 for value in e:
                     assert not value.valid
+
+
+class TestValidateDataSizeLimit:
+    """Huge text uploads must be rejected before decoding, not after."""
+
+    META = {keys.CONTENTTYPE: "text/plain;charset=utf-8"}
+
+    def test_small_text_passes(self):
+        assert validate_data(dict(self.META), BytesIO(b"hello world")) is True
+
+    def test_huge_text_rejected(self):
+        # limit is 100 MB; feed it just over without allocating it
+        class BigFile(BytesIO):
+            def __init__(self):
+                super().__init__(b"x")
+
+            def tell(self):
+                return 100 * 1024 * 1024 + 1
+
+        assert validate_data(dict(self.META), BigFile()) is False
+
+    def test_non_seekable_stream_bounded(self):
+        # request streams may not support seek: the fallback must read at
+        # most limit+1 bytes, never the whole stream; a stream that cannot
+        # even be rewound for that single read is rejected outright
+        class NoSeek(BytesIO):
+            def seekable(self):
+                return False
+
+            def seek(self, *a):
+                raise OSError("non-seekable")
+
+        data = NoSeek(b"y" * (100 * 1024 * 1024 + 5))
+        assert validate_data(dict(self.META), data) is False
+        # a stream that cannot even be rewound for that single read is
+        # rejected outright, even when small
+        assert validate_data(dict(self.META), NoSeek(b"tiny")) is False
+
+    def test_non_text_untouched(self):
+        # non-text mimetypes skip validation entirely (pre-existing behavior)
+        assert validate_data({keys.CONTENTTYPE: "image/png"}, BytesIO(b"\x89PNG" + b"0" * 200)) is True
