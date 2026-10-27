@@ -5,8 +5,10 @@
 MoinMoin - validation tests.
 """
 
+from io import BytesIO
+
 from moin.constants.itemtypes import ITEMTYPE_DEFAULT, ITEMTYPE_USERPROFILE
-from moin.storage.middleware.validation import ContentMetaSchema, UserMetaSchema
+from moin.storage.middleware.validation import ContentMetaSchema, UserMetaSchema, validate_data
 
 from moin.constants import keys
 from moin.constants.contenttypes import CONTENTTYPE_USER
@@ -105,3 +107,40 @@ class TestValidation:
             if e.name in (keys.SUBSCRIPTIONS,):
                 for value in e:
                     assert not value.valid
+
+
+class TestValidateDataSizeLimit:
+    """Huge text uploads must be rejected before decoding, not after."""
+
+    META = {keys.CONTENTTYPE: "text/plain;charset=utf-8"}
+
+    def test_small_text_passes(self):
+        assert validate_data(dict(self.META), BytesIO(b"hello world")) is True
+
+    def test_huge_text_rejected(self):
+        # limit is 100 MB; feed it just over without allocating it
+        class BigFile(BytesIO):
+            def __init__(self):
+                super().__init__(b"x")
+
+            def tell(self):
+                return 100 * 1024 * 1024 + 1
+
+        assert validate_data(dict(self.META), BigFile()) is False
+
+    def test_non_seekable_stream_rejected(self):
+        # Request streams that do not support seek never validated (the old
+        # code called data.seek(0) after reading), so they are rejected.
+        # Uses a tiny stream: no 100 MB allocation needed.
+        class NoSeek(BytesIO):
+            def seekable(self):
+                return False
+
+            def seek(self, *a):
+                raise OSError("non-seekable")
+
+        assert validate_data(dict(self.META), NoSeek(b"tiny")) is False
+
+    def test_non_text_untouched(self):
+        # non-text mimetypes skip validation entirely (pre-existing behavior)
+        assert validate_data({keys.CONTENTTYPE: "image/png"}, BytesIO(b"\x89PNG" + b"0" * 200)) is True

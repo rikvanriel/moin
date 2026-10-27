@@ -38,6 +38,9 @@ from moin.utils.mime import Type
 
 logging = log.getLogger(__name__)
 
+# Text uploads over this size are rejected before decoding.
+MAX_VALIDATED_TEXT_SIZE = 100 * 1024 * 1024  # 100 MB
+
 
 class DuckDict(Dict):
     # in duck mode, keys unknown to the schema will not cause errors
@@ -528,6 +531,18 @@ def validate_data(meta: MetaData, data: ItemData) -> bool:
     if ct.type != "text":
         # we can't validate non-text mimetypes, so assume it is ok
         return True
+
+    # Reject huge text uploads up front (a huge text would otherwise be
+    # fully decoded below). Non-seekable streams are rejected: callers
+    # rewind the stream after validation, so they could never be stored.
+    try:
+        data.seek(0, 2)  # seek to end
+        size = data.tell()
+        data.seek(0)  # rewind, so it can be read again
+    except OSError:
+        return False
+    if size > MAX_VALIDATED_TEXT_SIZE:
+        return False
 
     coding = ct.parameters["charset"].lower()
     if coding not in ["ascii", "utf-8"]:
